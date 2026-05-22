@@ -1,9 +1,14 @@
+import os
 import torch
 import torch.nn as nn
 import numpy as np
 import itertools
 from torch.utils.data import Dataset
 from torch.distributions.categorical import Categorical
+
+from fastshap import FastSHAP
+from fastshap import Surrogate, KLDivLoss
+from fastshap.utils import MaskLayer1d
 
 
 class MaskLayer1d(nn.Module):
@@ -188,3 +193,113 @@ class ShapleySampler:
         if paired_sampling:
             S[1::2] = 1 - S[0:(batch_size - 1):2]  # Note: allows batch_size % 2 == 1.
         return torch.from_numpy(S)
+
+def build_surrogate(
+    surrogate_path: str,
+    produce_surr_model: callable,
+    model,
+    num_features,
+    num_classes,
+    device: torch.device,
+    X_train = None,
+    X_val = None,
+    overwrite: bool = False
+):
+    surrogate_model = produce_surr_model(num_features, num_classes).to(device)
+
+    if os.path.isfile(surrogate_path) and not overwrite:
+        print('Loading saved surrogate model')
+        state = torch.load(surrogate_path)
+        surrogate_model.load_state_dict(state)
+        surrogate = Surrogate(surrogate_model, num_features)
+    else:
+        surrogate = Surrogate(surrogate_model, num_features)
+        print(surrogate)
+
+        # Set up original model
+        def original_model(x):
+            pred = model.predict(x.cpu().numpy())
+            if pred.shape[-1] == 1:
+                pred = np.stack([1 - pred, pred]).T
+            return torch.tensor(pred, dtype=torch.float32, device=x.device)
+
+        # Train
+        surrogate.train_original_model(
+            X_train,
+            X_val,
+            original_model,
+            batch_size=64,
+            max_epochs=1000,
+            loss_fn=KLDivLoss(),
+            validation_samples=10,
+            validation_batch_size=10000,
+            verbose=True,
+            lookback=200
+            )
+        surrogate_model.to("cpu")
+        torch.save(surrogate_model.state_dict(), surrogate_path)
+        surrogate_model.to(device)
+    return surrogate
+
+def standard_produce_surr_model(num_features, num_classes):
+    return nn.Sequential(
+        MaskLayer1d(value=0, append=True),
+        nn.Linear(2 * num_features, 128),
+        nn.ELU(inplace=True),
+        nn.Linear(128, 128),
+        nn.ELU(inplace=True),
+        nn.Linear(128, num_classes))
+
+def produce_expl_model(num_features, num_classes):
+    return nn.Sequential(
+        nn.Linear(num_features, 128),
+        nn.ReLU(inplace=True),
+        nn.Linear(128, 128),
+        nn.ReLU(inplace=True),
+        nn.Linear(128, num_classes * num_features))
+
+def build_explainer(
+    explainer_path,
+    produce_expl_model,
+    surrogate,
+    num_features,
+    num_classes,
+    device: torch.device,
+    X_train = None,
+    X_val = None,
+    overwrite: bool = False
+):
+    # Create explainer model
+    explainer = produce_expl_model(num_features, num_classes).to(device)
+
+    if os.path.isfile(explainer_path) and not overwrite:
+        print('Loading saved explainer model')
+        state = torch.load(explainer_path)
+
+        explainer.load_state_dict(state)
+
+        fastshap = FastSHAP(explainer, surrogate, normalization='additive',
+                            link=nn.Softmax(dim=-1))
+
+    else:
+
+        # Set up FastSHAP object
+        fastshap = FastSHAP(explainer, surrogate, normalization='additive',
+                            link=nn.Softmax(dim=-1))
+
+        # Train
+        fastshap.train(
+            X_train,
+            X_val[:100],
+            batch_size=32,
+            num_samples=32,
+            max_epochs=200,
+            validation_samples=128,
+            verbose=True,
+            lookback=30)
+        
+        # Save explainer
+        explainer.cpu()
+        torch.save(explainer.state_dict(), explainer_path)
+        explainer.to(device)
+    return explainer, fastshap
