@@ -353,8 +353,7 @@ class FastSHAP:
         loss_fn = nn.MSELoss()
         optimizer = optim.Adam(explainer.parameters(), lr=lr)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, factor=lr_factor, patience=lookback // 2, min_lr=min_lr,
-            verbose=verbose)
+            optimizer, factor=lr_factor, patience=lookback // 2, min_lr=min_lr)
         self.loss_list = []
         best_loss = np.inf
         best_epoch = -1
