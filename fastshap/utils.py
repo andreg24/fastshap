@@ -145,10 +145,12 @@ class UniformSampler:
 
         Args:
           batch_size: number of samples
+        Return:
+          S: tensor of shape batch_size X num_players with entries in {0, 1}
         '''
-        rand = torch.rand(batch_size, self.num_players)
+        rand = torch.rand(batch_size, self.num_players) # matrix in [0,1) with size batch x players
         thresh = torch.rand(batch_size, 1)
-        S = (thresh > rand).float()
+        S = (thresh > rand).float() # shape batch_size X num_players, belongs to 
 
         return S
 
