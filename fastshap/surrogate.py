@@ -7,6 +7,18 @@ from fastshap.utils import UniformSampler, DatasetRepeat
 from copy import deepcopy
 from tqdm.auto import tqdm
 
+def build_train_set(train_data):
+    if isinstance(train_data, np.ndarray):
+        train_data = torch.tensor(train_data, dtype=torch.float32)
+
+    if isinstance(train_data, torch.Tensor):
+        train_set = TensorDataset(train_data)
+    elif isinstance(train_data, Dataset):
+        train_set = train_data
+    else:
+        raise ValueError('train_data must be either tensor or a '
+                            'PyTorch Dataset')
+    return train_set
 
 def validate(surrogate, loss_fn, data_loader):
     '''
@@ -132,17 +144,7 @@ class Surrogate:
           verbose: verbosity.
         '''
         # Set up train dataset.
-        if isinstance(train_data, tuple):
-            x_train, y_train = train_data
-            if isinstance(x_train, np.ndarray):
-                x_train = torch.tensor(x_train, dtype=torch.float32)
-                y_train = torch.tensor(y_train, dtype=torch.float32)
-            train_set = TensorDataset(x_train, y_train)
-        elif isinstance(train_data, Dataset):
-            train_set = train_data
-        else:
-            raise ValueError('train_data must be either tuple of tensors or a '
-                             'PyTorch Dataset')
+        train_set = build_train_set(train_data)
 
         # Set up train data loader.
         random_sampler = RandomSampler(
@@ -287,16 +289,7 @@ class Surrogate:
           verbose: verbosity.
         '''
         # Set up train dataset.
-        if isinstance(train_data, np.ndarray):
-            train_data = torch.tensor(train_data, dtype=torch.float32)
-
-        if isinstance(train_data, torch.Tensor):
-            train_set = TensorDataset(train_data)
-        elif isinstance(train_data, Dataset):
-            train_set = train_data
-        else:
-            raise ValueError('train_data must be either tensor or a '
-                             'PyTorch Dataset')
+        train_set = build_train_set(train_data)
 
         # Set up train data loader.
         random_sampler = RandomSampler(
@@ -365,18 +358,18 @@ class Surrogate:
 
             for (x,) in batch_iter:
                 # Prepare data.
-                x = x.to(device)
+                x = x.to(device) # shape (batch_size, num_features)
 
                 # Get original model prediction.
                 with torch.no_grad():
-                    y = original_model(x)
+                    y = original_model(x) # (batch_size, num_classes)
 
                 # Generate subsets.
                 S = sampler.sample(batch_size).to(device=device)
 
                 # Make predictions.
-                pred = self.__call__(x, S)
-                loss = loss_fn(pred, y)
+                pred = self.__call__(x, S) # shape (batch_size, num_classes)
+                loss = loss_fn(pred, y) # e.g. KL divloss
 
                 # Optimizer step.
                 loss.backward()
